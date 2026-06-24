@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="auto">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Password Security Lab: анализатор сложности, энтропии, времени взлома и генератор безопасных паролей." />
+  <title>Password Security Lab</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Security Utility</p>
+        <h1>Password Security Lab</h1>
+      </div>
+      <div class="theme-control" aria-label="Настройка темы">
+        <button class="theme-btn active" data-theme-choice="auto" type="button">Авто</button>
+        <button class="theme-btn" data-theme-choice="light" type="button">Светлая</button>
+        <button class="theme-btn" data-theme-choice="dark" type="button">Тёмная</button>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Основные разделы">
+      <button class="tab active" data-section="analyzer" type="button">Анализатор</button>
+      <button class="tab" data-section="generator" type="button">Генератор</button>
+      <button class="tab" data-section="history" type="button">История</button>
+    </nav>
+
+    <main>
+      <section id="analyzer" class="section active">
+        <div class="grid two">
+          <article class="panel input-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Анализ</p>
+                <h2>Проверка пароля</h2>
+              </div>
+              <button id="clearAnalyzer" class="ghost-btn" type="button">Очистить</button>
+            </div>
+            <label class="field">
+              <span>Введите пароль</span>
+              <div class="password-field">
+                <input id="passwordInput" type="password" autocomplete="new-password" placeholder="Например: Forest-Tiger-Rocket-82" />
+                <button id="togglePassword" type="button" aria-label="Показать или скрыть пароль">Показать</button>
+              </div>
+            </label>
+            <div class="strength-meter" aria-label="Индикатор сложности">
+              <div id="strengthFill" class="strength-fill"></div>
+            </div>
+            <div id="strengthLabel" class="strength-label">Введите пароль для анализа</div>
+            <div id="recommendations" class="recommendations"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Показатели</p>
+                <h2>Качество пароля</h2>
+              </div>
+            </div>
+            <div id="analysisCards" class="metric-grid"></div>
+            <div id="charsetBadges" class="badge-row"></div>
+          </article>
+        </div>
+
+        <div class="grid two lower-grid">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Brute Force</p>
+                <h2>Время полного перебора</h2>
+              </div>
+            </div>
+            <div id="crackTimes" class="time-list"></div>
+          </article>
+
+          <article class="panel chart-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Сравнение</p>
+                <h2>График стойкости</h2>
+              </div>
+            </div>
+            <canvas id="crackChart" width="900" height="420" role="img" aria-label="График сравнения времени взлома"></canvas>
+            <div class="chart-legend">
+              <span><i class="dot current"></i>Текущий</span>
+              <span><i class="dot recommended"></i>Рекомендованный</span>
+              <span><i class="dot corporate"></i>Корпоративный</span>
+              <span><i class="dot high"></i>Высокий</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="generator" class="section">
+        <div class="generator-layout">
+          <aside class="panel generator-menu" aria-label="Режимы генератора">
+            <button class="mode-btn active" data-mode="random" type="button">Случайные пароли</button>
+            <button class="mode-btn" data-mode="memorable" type="button">Запоминаемые</button>
+            <button class="mode-btn" data-mode="keys" type="button">Ключи и лицензии</button>
+            <button class="mode-btn" data-mode="readableKeys" type="button">Читаемые ключи</button>
+          </aside>
+
+          <div class="generator-workspace">
+            <section class="panel generator-mode active" id="mode-random">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Генератор</p>
+                  <h2>Случайные пароли</h2>
+                </div>
+                <button id="generateRandom" class="primary-btn" type="button">Сгенерировать</button>
+              </div>
+              <div class="preset-row" id="presetRow"></div>
+              <div class="form-grid">
+                <label class="field"><span>Длина: <b id="lengthValue">16</b></span><input id="passwordLength" type="range" min="4" max="128" value="16" /></label>
+                <label class="field"><span>Количество</span><input id="passwordCount" type="number" min="1" max="20" value="5" /></label>
+              </div>
+              <div class="checks-grid">
+                <label><input id="useUpper" type="checkbox" checked /> Заглавные буквы</label>
+                <label><input id="useLower" type="checkbox" checked /> Строчные буквы</label>
+                <label><input id="useDigits" type="checkbox" checked /> Цифры</label>
+                <label><input id="useSpecial" type="checkbox" checked /> Спецсимволы</label>
+                <label><input id="excludeSimilar" type="checkbox" /> Исключить похожие символы</label>
+                <label><input id="excludeAmbiguous" type="checkbox" /> Исключить неоднозначные символы</label>
+                <label><input id="excludeCombos" type="checkbox" /> Исключить похожие комбинации</label>
+              </div>
+            </section>
+
+            <section class="panel generator-mode" id="mode-memorable">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Слова</p>
+                  <h2>Запоминаемые пароли</h2>
+                </div>
+                <button id="generateMemorable" class="primary-btn" type="button">Сгенерировать</button>
+              </div>
+              <div class="form-grid">
+                <label class="field"><span>Количество слов</span><input id="wordCount" type="number" min="2" max="8" value="4" /></label>
+                <label class="field"><span>Разделитель</span><input id="wordSeparator" type="text" maxlength="3" value="-" /></label>
+                <label class="field"><span>Регистр</span><select id="wordCase"><option value="title">Title Case</option><option value="lower">lowercase</option><option value="upper">UPPERCASE</option><option value="mixed">Смешанный</option></select></label>
+                <label class="field"><span>Количество</span><input id="memorableCount" type="number" min="1" max="20" value="5" /></label>
+              </div>
+              <div class="checks-grid">
+                <label><input id="wordDigits" type="checkbox" checked /> Добавлять цифры</label>
+                <label><input id="wordSpecial" type="checkbox" /> Добавлять спецсимвол</label>
+              </div>
+            </section>
+
+            <section class="panel generator-mode" id="mode-keys">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Шаблоны</p>
+                  <h2>Ключи и лицензии</h2>
+                </div>
+                <button id="generateKeys" class="primary-btn" type="button">Сгенерировать</button>
+              </div>
+              <div class="template-help">A = буква любого регистра или цифра, L = буква, U = заглавная, D = цифра, S = спецсимвол.</div>
+              <div class="preset-row" id="templatePresets"></div>
+              <div class="form-grid">
+                <label class="field wide"><span>Пользовательский шаблон</span><input id="keyTemplate" type="text" value="AAAAA-AAAAAA-AAAAA" /></label>
+                <label class="field"><span>Количество</span><input id="keyCount" type="number" min="1" max="20" value="5" /></label>
+              </div>
+              <button id="saveTemplate" class="ghost-btn" type="button">Сохранить шаблон</button>
+            </section>
+
+            <section class="panel generator-mode" id="mode-readableKeys">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Readable</p>
+                  <h2>Читаемые ключи</h2>
+                </div>
+                <button id="generateReadableKeys" class="primary-btn" type="button">Сгенерировать</button>
+              </div>
+              <div class="form-grid">
+                <label class="field"><span>Слова</span><input id="readableWordCount" type="number" min="2" max="6" value="3" /></label>
+                <label class="field"><span>Разделитель</span><select id="readableSeparator"><option>-</option><option>_</option><option>.</option><option value="">без разделителя</option></select></label>
+                <label class="field"><span>Количество</span><input id="readableCount" type="number" min="1" max="20" value="5" /></label>
+              </div>
+              <div class="checks-grid">
+                <label><input id="readableDigits" type="checkbox" checked /> Случайные цифры</label>
+                <label><input id="readableMixed" type="checkbox" checked /> Смешанный регистр</label>
+              </div>
+            </section>
+
+            <article class="panel results-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Результаты</p>
+                  <h2>Сгенерированные значения</h2>
+                </div>
+                <button id="copyAll" class="ghost-btn" type="button">Копировать всё</button>
+              </div>
+              <div id="generatedList" class="generated-list"></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="history" class="section">
+        <div class="grid two">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">LocalStorage</p>
+                <h2>Последние генерации</h2>
+              </div>
+              <button class="ghost-btn" data-export="generated" type="button">TXT</button>
+              <button class="ghost-btn" data-export-csv="generated" type="button">CSV</button>
+            </div>
+            <div id="generatedHistory" class="history-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">LocalStorage</p>
+                <h2>Последние проверки</h2>
+              </div>
+              <button class="ghost-btn" data-export="checked" type="button">TXT</button>
+              <button class="ghost-btn" data-export-csv="checked" type="button">CSV</button>
+            </div>
+            <div id="checkedHistory" class="history-list"></div>
+          </article>
+        </div>
+        <div class="grid two lower-grid">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Favorites</p>
+                <h2>Избранные пароли</h2>
+              </div>
+            </div>
+            <div id="favoritesList" class="history-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Templates</p>
+                <h2>Пользовательские шаблоны</h2>
+              </div>
+            </div>
+            <div id="templatesList" class="history-list"></div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="script.js"></script>
+</body>
+</html>
