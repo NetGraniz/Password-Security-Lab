@@ -1,6 +1,5 @@
 "use strict";
 
-// StorageService centralizes all LocalStorage operations and keeps each list capped.
 class StorageService {
   constructor(prefix = "psl") {
     this.prefix = prefix;
@@ -29,26 +28,18 @@ class StorageService {
     this.set(name, list.slice(0, limit));
   }
 
-  toggleFavorite(value) {
-    const favorites = this.get("favorites");
-    const exists = favorites.some((item) => item.value === value);
-    const next = exists
-      ? favorites.filter((item) => item.value !== value)
-      : [{ value, createdAt: new Date().toISOString() }, ...favorites].slice(0, 50);
-    this.set("favorites", next);
-    return !exists;
+  clear(name) {
+    localStorage.removeItem(this.key(name));
+  }
+
+  clearAllProjectData() {
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith(`${this.prefix}:`))
+      .forEach((key) => localStorage.removeItem(key));
   }
 }
 
-// EntropyCalculator estimates the search space and applies penalties for obvious weaknesses.
 class EntropyCalculator {
-  static charsets = {
-    upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    lower: "abcdefghijklmnopqrstuvwxyz",
-    digits: "0123456789",
-    special: "!@#$%^&*()_+-=[]{}|;:,.<>?/~`"
-  };
-
   static detect(password) {
     return {
       upper: /[A-ZА-ЯЁ]/.test(password),
@@ -60,25 +51,144 @@ class EntropyCalculator {
 
   static poolSize(flags) {
     let size = 0;
-    if (flags.upper) size += 26;
-    if (flags.lower) size += 26;
+    if (flags.upper) size += 59;
+    if (flags.lower) size += 59;
     if (flags.digits) size += 10;
     if (flags.special) size += 32;
     return Math.max(size, 1);
   }
 
-  static calculate(password) {
+  static theoretical(password) {
     if (!password) return 0;
-    const flags = this.detect(password);
-    const rawEntropy = password.length * Math.log2(this.poolSize(flags));
-    const repeatPenalty = /(.)\1{2,}/.test(password) ? 10 : 0;
-    const sequencePenalty = PasswordAnalyzer.sequencePatterns.some((pattern) => password.toLowerCase().includes(pattern)) ? 12 : 0;
-    const dictionaryPenalty = PasswordAnalyzer.dictionary.some((word) => password.toLowerCase().includes(word)) ? 14 : 0;
-    return Math.max(0, rawEntropy - repeatPenalty - sequencePenalty - dictionaryPenalty);
+    return password.length * Math.log2(this.poolSize(this.detect(password)));
+  }
+
+  static passphrase(dictionarySize, wordCount, hasDigits, hasSpecial) {
+    let entropy = wordCount * Math.log2(dictionarySize);
+    if (hasDigits) entropy += Math.log2(100);
+    if (hasSpecial) entropy += Math.log2(10);
+    return entropy;
   }
 }
 
-// CrackTimeEstimator converts entropy into rough brute-force time for several attacker profiles.
+class PasswordAnalyzer {
+  static weakPatterns = [
+    "password", "admin", "qwerty", "qwerty123", "password123", "admin123", "welcome", "letmein",
+    "iloveyou", "monkey", "dragon", "football", "master", "secret", "пароль", "админ", "привет",
+    "любовь", "qwertyйцукен", "йцукен", "123456", "123456789", "111111", "000000"
+  ];
+
+  static sequencePatterns = ["qwerty", "йцукен", "asdfgh", "zxcvbn", "123456", "654321", "abcdef", "aaa111"];
+  static dictionary = [
+    "password", "admin", "welcome", "login", "user", "dragon", "monkey", "master", "football", "iloveyou",
+    "secret", "letmein", "пароль", "админ", "привет", "любовь", "секрет", "доступ", "логин",
+    "privet", "parol", "admin", "lubov", "sekret", "dostup"
+  ];
+  static leetWords = ["p@ssw0rd", "pa55word", "adm1n", "s3cret", "l0v3", "qwerty"];
+
+  analyze(password, breach = null) {
+    const flags = EntropyCalculator.detect(password);
+    const theoreticalEntropy = EntropyCalculator.theoretical(password);
+    const lower = password.toLowerCase();
+    const weakMatches = PasswordAnalyzer.weakPatterns.filter((pattern) => lower.includes(pattern));
+    const sequenceMatches = PasswordAnalyzer.sequencePatterns.filter((pattern) => lower.includes(pattern));
+    const dictionaryMatches = PasswordAnalyzer.dictionary.filter((word) => lower.includes(word));
+    const leetMatches = PasswordAnalyzer.leetWords.filter((word) => lower.includes(word));
+    const hasRepeats = /(.)\1{2,}/u.test(password) || /(.{2,})\1{1,}/u.test(password);
+    const dateMatches = this.detectDates(password);
+    const penalties = this.penalties({ password, weakMatches, sequenceMatches, dictionaryMatches, leetMatches, hasRepeats, dateMatches, breach });
+    const practicalEntropy = Math.max(0, theoreticalEntropy - penalties.total);
+    const level = this.level(practicalEntropy);
+    const verdict = this.verdict({ password, practicalEntropy, weakMatches, sequenceMatches, dictionaryMatches, leetMatches, hasRepeats, dateMatches, breach });
+    return {
+      length: password.length,
+      flags,
+      theoreticalEntropy,
+      practicalEntropy,
+      weakMatches,
+      sequenceMatches,
+      dictionaryMatches,
+      leetMatches,
+      hasRepeats,
+      dateMatches,
+      penalties,
+      level,
+      verdict,
+      keyRecommendation: this.keyRecommendation(password, verdict, breach),
+      recommendations: this.recommendations(password, { weakMatches, sequenceMatches, dictionaryMatches, leetMatches, hasRepeats, dateMatches, breach })
+    };
+  }
+
+  detectDates(password) {
+    const matches = [];
+    const years = password.match(/\b(19[9][0-9]|20[0-3][0-9])\b/g) || [];
+    matches.push(...years.filter((year) => Number(year) >= 1990 && Number(year) <= 2035));
+    const compactDates = password.match(/\b(0[1-9]|[12][0-9]|3[01])(0[1-9]|1[0-2])(19[9][0-9]|20[0-3][0-9])\b/g) || [];
+    const dottedDates = password.match(/\b(0?[1-9]|[12][0-9]|3[01])[./-](0?[1-9]|1[0-2])[./-](19[9][0-9]|20[0-3][0-9])\b/g) || [];
+    matches.push(...compactDates, ...dottedDates);
+    return [...new Set(matches)];
+  }
+
+  penalties(data) {
+    let total = 0;
+    if (data.password.length > 0 && data.password.length < 10) total += 22;
+    if (data.password.length > 0 && data.password.length < 15) total += 10;
+    total += data.weakMatches.length * 24;
+    total += data.sequenceMatches.length * 16;
+    total += data.dictionaryMatches.length * 14;
+    total += data.leetMatches.length * 18;
+    total += data.dateMatches.length * 12;
+    if (data.hasRepeats) total += 14;
+    if (data.breach?.found) total += 45;
+    return { total };
+  }
+
+  level(entropy) {
+    const score = Math.max(0, Math.min(100, Math.round(entropy * 1.2)));
+    if (score < 25) return { name: "Очень слабый", score, color: "var(--danger)" };
+    if (score < 45) return { name: "Слабый", score, color: "var(--orange)" };
+    if (score < 65) return { name: "Средний", score, color: "var(--yellow)" };
+    if (score < 85) return { name: "Хороший", score, color: "var(--green)" };
+    return { name: "Отличный", score, color: "var(--blue)" };
+  }
+
+  verdict(data) {
+    const obviousWeakness = data.weakMatches.length || data.sequenceMatches.length || data.dictionaryMatches.length || data.leetMatches.length || data.dateMatches.length || data.hasRepeats;
+    if (!data.password) return "Нет данных";
+    if (data.breach?.found || data.password.length < 8 || data.practicalEntropy < 25 || data.weakMatches.length) return "Не использовать";
+    if (data.password.length < 12 || obviousWeakness || data.practicalEntropy < 45) return "Слабый";
+    if (data.password.length < 15 || data.practicalEntropy < 65) return "Нормальный";
+    if (data.practicalEntropy < 90) return "Хороший";
+    return "Отличный";
+  }
+
+  keyRecommendation(password, verdict, breach) {
+    if (!password) return "Введите пароль, чтобы получить оценку.";
+    if (breach?.found) return "Немедленно замените пароль: он найден в известных утечках.";
+    if (verdict === "Не использовать") return "Создайте новый пароль длиной минимум 15 символов или парольную фразу.";
+    if (verdict === "Слабый") return "Увеличьте длину и уберите предсказуемые слова, даты и последовательности.";
+    if (verdict === "Нормальный") return "Подойдёт для низкого риска; для важных аккаунтов используйте 16-20+ символов.";
+    return "Используйте этот пароль только уникально для одного сервиса и храните его в менеджере паролей.";
+  }
+
+  recommendations(password, data) {
+    const tips = [];
+    if (!password) return ["Введите пароль, чтобы увидеть рекомендации."];
+    if (password.length < 15) tips.push("Главное улучшение: увеличьте длину минимум до 15 символов.");
+    if (password.length < 20) tips.push("Для критичных аккаунтов лучше 16-20+ символов или фраза из случайных слов.");
+    if (data.breach?.found) tips.push("Пароль найден в утечках. Не используйте его даже с изменённым регистром.");
+    if (data.weakMatches.length) tips.push(`Уберите известные слабые шаблоны: ${data.weakMatches.join(", ")}.`);
+    if (data.sequenceMatches.length) tips.push(`Избегайте клавиатурных и числовых последовательностей: ${data.sequenceMatches.join(", ")}.`);
+    if (data.dictionaryMatches.length) tips.push(`Не используйте словарные слова и транслит: ${data.dictionaryMatches.join(", ")}.`);
+    if (data.leetMatches.length) tips.push("Простые замены вроде p@ssw0rd хорошо угадываются атакующими.");
+    if (data.dateMatches.length) tips.push(`Уберите даты и годы: ${data.dateMatches.join(", ")}.`);
+    if (data.hasRepeats) tips.push("Сократите повторяющиеся символы или повторяющиеся блоки.");
+    tips.push("Используйте уникальный пароль для каждого сервиса. Повторное использование опаснее, чем отсутствие спецсимвола.");
+    tips.push("Спецсимволы полезны как дополнительное усиление, но длина и непредсказуемость важнее.");
+    return tips;
+  }
+}
+
 class CrackTimeEstimator {
   constructor() {
     this.scenarios = [
@@ -96,17 +206,7 @@ class CrackTimeEstimator {
 
   format(seconds) {
     if (!Number.isFinite(seconds)) return "практически бесконечно";
-    const units = [
-      ["секунд", 60],
-      ["минут", 60],
-      ["часов", 24],
-      ["дней", 30],
-      ["месяцев", 12],
-      ["лет", 1000],
-      ["тысяч лет", 1000],
-      ["миллионов лет", 1000],
-      ["миллиардов лет", Infinity]
-    ];
+    const units = [["секунд", 60], ["минут", 60], ["часов", 24], ["дней", 30], ["месяцев", 12], ["лет", 1000], ["тысяч лет", 1000], ["миллионов лет", 1000], ["миллиардов лет", Infinity]];
     let value = Math.max(seconds, 0);
     for (const [unit, divider] of units) {
       if (value < divider) return `${this.round(value)} ${unit}`;
@@ -130,118 +230,19 @@ class CrackTimeEstimator {
   }
 }
 
-// PasswordAnalyzer combines entropy, pattern checks, dictionary hits, and recommendations.
-class PasswordAnalyzer {
-  static weakPatterns = ["123456", "qwerty", "password", "admin", "welcome", "letmein", "qwerty123", "password123", "admin123"];
-  static sequencePatterns = ["abcdef", "qwerty", "123456", "654321", "aaa111"];
-  static dictionary = ["password", "admin", "welcome", "login", "user", "dragon", "monkey", "master", "football", "iloveyou", "secret"];
-
-  analyze(password) {
-    const flags = EntropyCalculator.detect(password);
-    const entropy = EntropyCalculator.calculate(password);
-    const lower = password.toLowerCase();
-    const weakMatches = PasswordAnalyzer.weakPatterns.filter((pattern) => lower.includes(pattern));
-    const sequenceMatches = PasswordAnalyzer.sequencePatterns.filter((pattern) => lower.includes(pattern));
-    const hasRepeats = /(.)\1{2,}/.test(password) || /(.{2,})\1{1,}/.test(password);
-    const dictionaryMatches = PasswordAnalyzer.dictionary.filter((word) => lower.includes(word));
-    const level = this.level(entropy, password.length, weakMatches.length + sequenceMatches.length + dictionaryMatches.length + (hasRepeats ? 1 : 0));
-    return {
-      password,
-      length: password.length,
-      entropy,
-      level,
-      flags,
-      weakMatches,
-      sequenceMatches,
-      hasRepeats,
-      dictionaryMatches,
-      quality: this.qualityText(level.name),
-      recommendations: this.recommendations(password, flags, weakMatches, sequenceMatches, hasRepeats, dictionaryMatches)
-    };
-  }
-
-  level(entropy, length, penalties) {
-    let score = Math.min(100, Math.round(entropy * 1.25 + Math.min(length, 32)));
-    score -= penalties * 15;
-    score = Math.max(0, score);
-    if (score < 25) return { name: "Очень слабый", score, color: "var(--danger)" };
-    if (score < 45) return { name: "Слабый", score, color: "var(--orange)" };
-    if (score < 65) return { name: "Средний", score, color: "var(--yellow)" };
-    if (score < 85) return { name: "Хороший", score, color: "var(--green)" };
-    return { name: "Отличный", score, color: "var(--blue)" };
-  }
-
-  qualityText(level) {
-    const map = {
-      "Очень слабый": "Пароль легко угадывается и не подходит для реальных аккаунтов.",
-      "Слабый": "Есть базовая защита, но пароль всё ещё рискованный.",
-      "Средний": "Приемлемо для низкого риска, но лучше усилить.",
-      "Хороший": "Хорошая стойкость для большинства бытовых сценариев.",
-      "Отличный": "Высокая стойкость и здоровый запас энтропии."
-    };
-    return map[level];
-  }
-
-  recommendations(password, flags, weak, sequences, repeats, dictionary) {
-    const tips = [];
-    if (password.length < 12) tips.push("Увеличьте длину хотя бы до 12-16 символов.");
-    if (!flags.upper) tips.push("Добавьте заглавные буквы.");
-    if (!flags.lower) tips.push("Добавьте строчные буквы.");
-    if (!flags.digits) tips.push("Добавьте цифры.");
-    if (!flags.special) tips.push("Добавьте специальные символы.");
-    if (weak.length) tips.push(`Замените слабые шаблоны: ${weak.join(", ")}.`);
-    if (sequences.length) tips.push(`Избегайте последовательностей: ${sequences.join(", ")}.`);
-    if (repeats) tips.push("Уберите повторяющиеся символы или блоки.");
-    if (dictionary.length) tips.push(`Не используйте словарные слова: ${dictionary.join(", ")}.`);
-    if (!tips.length) tips.push("Пароль выглядит устойчивым. Для критичных сервисов используйте уникальный пароль.");
-    return tips;
-  }
-}
-
-// PasswordGenerator uses Web Crypto randomness and configurable character pools.
-class PasswordGenerator {
-  constructor() {
-    this.upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-    this.lower = "abcdefghijkmnopqrstuvwxyz";
-    this.digits = "23456789";
-    this.special = "!@#$%^&*_-+=?";
-    this.similar = "Il1O0";
-    this.ambiguous = "{}[]()/\\'\"`~,;:.<>";
-  }
-
+class SecureRandom {
   randomInt(max) {
+    if (!Number.isSafeInteger(max) || max <= 0) throw new Error("Некорректная граница случайного числа");
+    const limit = Math.floor(0x100000000 / max) * max;
     const array = new Uint32Array(1);
-    crypto.getRandomValues(array);
+    do {
+      crypto.getRandomValues(array);
+    } while (array[0] >= limit);
     return array[0] % max;
   }
 
   pick(chars) {
     return chars[this.randomInt(chars.length)];
-  }
-
-  clean(chars, options) {
-    let value = chars;
-    if (options.excludeSimilar) value = [...value].filter((char) => !this.similar.includes(char)).join("");
-    if (options.excludeAmbiguous) value = [...value].filter((char) => !this.ambiguous.includes(char)).join("");
-    return value;
-  }
-
-  generate(options) {
-    const sets = [];
-    if (options.upper) sets.push(this.clean(this.upper, options));
-    if (options.lower) sets.push(this.clean(this.lower, options));
-    if (options.digits) sets.push(this.clean(this.digits, options));
-    if (options.special) sets.push(this.clean(this.special, options));
-    const pool = sets.join("");
-    if (!pool) return "";
-    const chars = sets.map((set) => this.pick(set));
-    while (chars.length < options.length) {
-      const next = this.pick(pool);
-      const last = chars.at(-1);
-      if (options.excludeCombos && last && last.toLowerCase() === next.toLowerCase()) continue;
-      chars.push(next);
-    }
-    return this.shuffle(chars).join("");
   }
 
   shuffle(chars) {
@@ -253,12 +254,54 @@ class PasswordGenerator {
   }
 }
 
-// WordPasswordGenerator creates readable passphrases and human-friendly key fragments.
+class PasswordGenerator {
+  constructor() {
+    this.random = new SecureRandom();
+    this.upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    this.lower = "abcdefghijkmnopqrstuvwxyz";
+    this.digits = "23456789";
+    this.special = "!@#$%^&*_-+=?";
+    this.similar = "Il1O0";
+    this.ambiguous = "{}[]()/\\'\"`~,;:.<>";
+  }
+
+  clean(chars, options) {
+    let value = chars;
+    if (options.excludeSimilar) value = [...value].filter((char) => !this.similar.includes(char)).join("");
+    if (options.excludeAmbiguous) value = [...value].filter((char) => !this.ambiguous.includes(char)).join("");
+    return value;
+  }
+
+  sets(options) {
+    const sets = [];
+    if (options.upper) sets.push(this.clean(this.upper, options));
+    if (options.lower) sets.push(this.clean(this.lower, options));
+    if (options.digits) sets.push(this.clean(this.digits, options));
+    if (options.special) sets.push(this.clean(this.special, options));
+    return sets.filter(Boolean);
+  }
+
+  generate(options) {
+    const sets = this.sets(options);
+    if (!sets.length) return { value: "", adjustedLength: options.length };
+    const adjustedLength = Math.max(options.length, sets.length);
+    const pool = sets.join("");
+    const chars = sets.map((set) => this.random.pick(set));
+    while (chars.length < adjustedLength) {
+      const next = this.random.pick(pool);
+      const last = chars.at(-1);
+      if (options.excludeCombos && last && last.toLowerCase() === next.toLowerCase()) continue;
+      chars.push(next);
+    }
+    return { value: this.random.shuffle(chars).join(""), adjustedLength };
+  }
+}
+
 class WordPasswordGenerator {
   constructor() {
-    this.words = ["Forest", "Tiger", "Rocket", "Blue", "Horse", "River", "Moon", "Cloud", "Fox", "Delta", "Storm", "Cedar", "Nova", "Pixel", "Atlas", "Signal", "Quartz", "Falcon", "Meadow", "Vector", "Silver", "Orbit", "Amber", "Harbor", "Zenith", "Comet", "Prairie", "Summit"];
+    this.words = window.PSL_WORDS || { en: [], ru: [] };
     this.special = "!@#$%&*?";
-    this.passwordGenerator = new PasswordGenerator();
+    this.random = new SecureRandom();
   }
 
   makeWord(word, mode) {
@@ -268,22 +311,23 @@ class WordPasswordGenerator {
     return word[0].toUpperCase() + word.slice(1).toLowerCase();
   }
 
-  generate({ count, separator, digits, special, wordCase }) {
-    const parts = Array.from({ length: count }, () => {
-      const word = this.words[this.passwordGenerator.randomInt(this.words.length)];
-      return this.makeWord(word, wordCase);
-    });
-    if (digits) parts.splice(this.passwordGenerator.randomInt(parts.length + 1), 0, String(this.passwordGenerator.randomInt(90) + 10));
+  generate({ count, separator, digits, special, wordCase = "title", language = "en" }) {
+    const dictionary = this.words[language] || this.words.en;
+    const parts = Array.from({ length: count }, () => this.makeWord(dictionary[this.random.randomInt(dictionary.length)], wordCase));
+    if (digits) parts.splice(this.random.randomInt(parts.length + 1), 0, String(this.random.randomInt(90) + 10));
     let value = parts.join(separator);
-    if (special) value += this.special[this.passwordGenerator.randomInt(this.special.length)];
-    return value;
+    if (special) value += this.special[this.random.randomInt(this.special.length)];
+    return {
+      value,
+      entropy: EntropyCalculator.passphrase(dictionary.length, count, digits, special),
+      dictionarySize: dictionary.length
+    };
   }
 }
 
-// KeyGenerator replaces template tokens with random characters while preserving separators.
 class KeyGenerator {
   constructor() {
-    this.generator = new PasswordGenerator();
+    this.random = new SecureRandom();
     this.map = {
       A: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
       L: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
@@ -294,11 +338,30 @@ class KeyGenerator {
   }
 
   generate(template) {
-    return [...template].map((token) => this.map[token] ? this.generator.pick(this.map[token]) : token).join("");
+    return [...template].map((token) => this.map[token] ? this.random.pick(this.map[token]) : token).join("");
   }
 }
 
-// ChartVisualizer draws a dependency-free interactive canvas chart.
+class PwnedChecker {
+  async sha1(value) {
+    const bytes = new TextEncoder().encode(value);
+    const hash = await crypto.subtle.digest("SHA-1", bytes);
+    return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
+
+  async check(password) {
+    const hash = await this.sha1(password);
+    const prefix = hash.slice(0, 5);
+    const suffix = hash.slice(5);
+    const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("HIBP недоступен");
+    const text = await response.text();
+    const row = text.split(/\r?\n/).find((line) => line.startsWith(suffix));
+    if (!row) return { status: "checked", found: false, count: 0 };
+    return { status: "checked", found: true, count: Number(row.split(":")[1]) || 0 };
+  }
+}
+
 class ChartVisualizer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -327,7 +390,6 @@ class ChartVisualizer {
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim();
     ctx.fillRect(0, 0, width, height);
     ctx.strokeStyle = "#94a3b8";
-    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(80, 35);
     ctx.lineTo(80, height - 60);
@@ -338,7 +400,7 @@ class ChartVisualizer {
     const gap = 70;
     this.bars = [];
     values.forEach((item, index) => {
-      const barHeight = Math.max(4, ((Math.min(item.entropy, maxEntropy) / maxEntropy) * (height - 120)));
+      const barHeight = Math.max(4, (Math.min(item.entropy, maxEntropy) / maxEntropy) * (height - 120));
       const x = 105 + index * (barWidth + gap);
       const y = height - 60 - barHeight;
       this.bars.push({ ...item, x, y, width: barWidth, height: barHeight });
@@ -363,14 +425,13 @@ class ChartVisualizer {
       this.tooltip.style.display = "none";
       return;
     }
-    this.tooltip.textContent = `${hit.label}: ${Math.round(hit.entropy)} бит энтропии`;
+    this.tooltip.textContent = `${hit.label}: ${Math.round(hit.entropy)} бит практической оценки`;
     this.tooltip.style.left = `${event.clientX + 14}px`;
     this.tooltip.style.top = `${event.clientY + 14}px`;
     this.tooltip.style.display = "block";
   }
 }
 
-// App wires UI events to independent modules and keeps rendering concerns in one place.
 class App {
   constructor() {
     this.storage = new StorageService();
@@ -379,8 +440,12 @@ class App {
     this.passwordGenerator = new PasswordGenerator();
     this.wordGenerator = new WordPasswordGenerator();
     this.keyGenerator = new KeyGenerator();
+    this.pwnedChecker = new PwnedChecker();
     this.chart = new ChartVisualizer(document.querySelector("#crackChart"));
     this.generated = [];
+    this.hiddenGenerated = false;
+    this.lastBreach = null;
+    this.lastAnalysis = null;
     this.presets = {
       "Офисный": { length: 12, upper: true, lower: true, digits: true, special: false },
       "Корпоративный": { length: 16, upper: true, lower: true, digits: true, special: true },
@@ -396,9 +461,9 @@ class App {
     this.bindTheme();
     this.bindAnalyzer();
     this.bindGenerators();
+    this.bindHistory();
     this.renderPresets();
     this.renderHistory();
-    this.generateRandom();
     this.updateAnalysis("");
   }
 
@@ -413,6 +478,10 @@ class App {
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  privateMode() {
+    return this.$("#privateMode")?.checked ?? true;
   }
 
   bindNavigation() {
@@ -439,22 +508,30 @@ class App {
         localStorage.setItem("psl:theme", button.dataset.themeChoice);
         document.querySelectorAll(".theme-btn").forEach((item) => item.classList.remove("active"));
         button.classList.add("active");
-        this.chart.draw(this.lastEntropy || 0);
+        this.chart.draw(this.lastAnalysis?.practicalEntropy || 0);
       });
     });
   }
 
   bindAnalyzer() {
     const input = this.$("#passwordInput");
-    input.addEventListener("input", () => this.updateAnalysis(input.value));
+    input.addEventListener("input", () => {
+      this.lastBreach = null;
+      this.setPwnedMessage("Проверка утечек выполняется только по кнопке через k-anonymity.", "neutral");
+      this.updateAnalysis(input.value);
+    });
     this.$("#togglePassword").addEventListener("click", () => {
       input.type = input.type === "password" ? "text" : "password";
       this.$("#togglePassword").textContent = input.type === "password" ? "Показать" : "Скрыть";
     });
     this.$("#clearAnalyzer").addEventListener("click", () => {
       input.value = "";
+      this.lastBreach = null;
       this.updateAnalysis("");
+      this.setPwnedMessage("Проверка утечек выполняется только по кнопке через k-anonymity.", "neutral");
     });
+    this.$("#checkPwned").addEventListener("click", () => this.checkPwned());
+    this.$("#saveCheck").addEventListener("click", () => this.saveCheck());
   }
 
   bindGenerators() {
@@ -462,24 +539,38 @@ class App {
       this.$("#lengthValue").textContent = event.target.value;
     });
     this.$("#generateRandom").addEventListener("click", () => this.generateRandom());
+    this.$("#generatePhrase").addEventListener("click", () => this.generatePhrase());
     this.$("#generateMemorable").addEventListener("click", () => this.generateMemorable());
     this.$("#generateKeys").addEventListener("click", () => this.generateKeys());
     this.$("#generateReadableKeys").addEventListener("click", () => this.generateReadableKeys());
     this.$("#copyAll").addEventListener("click", () => this.copy(this.generated.map((item) => item.value).join("\n")));
+    this.$("#hideAll").addEventListener("click", () => {
+      this.hiddenGenerated = !this.hiddenGenerated;
+      this.$("#hideAll").textContent = this.hiddenGenerated ? "Показать все значения" : "Скрыть все значения";
+      this.renderGenerated();
+    });
     this.$("#saveTemplate").addEventListener("click", () => this.saveTemplate());
+    this.$("#privateMode").addEventListener("change", () => {
+      if (this.privateMode()) this.$("#saveGenerated").checked = false;
+      this.toast(this.privateMode() ? "Приватный режим включён" : "Приватный режим выключен");
+    });
+  }
+
+  bindHistory() {
     document.querySelectorAll("[data-export]").forEach((button) => button.addEventListener("click", () => this.exportHistory(button.dataset.export, "txt")));
     document.querySelectorAll("[data-export-csv]").forEach((button) => button.addEventListener("click", () => this.exportHistory(button.dataset.exportCsv, "csv")));
+    document.querySelectorAll("[data-clear]").forEach((button) => button.addEventListener("click", () => this.clearList(button.dataset.clear)));
+    this.$("#clearAllHistory").addEventListener("click", () => this.clearAllHistory());
   }
 
   renderPresets() {
-    const row = this.$("#presetRow");
     Object.entries(this.presets).forEach(([name, preset]) => {
       const button = document.createElement("button");
       button.className = "preset-btn";
       button.type = "button";
       button.textContent = name;
       button.addEventListener("click", () => this.applyPreset(preset));
-      row.append(button);
+      this.$("#presetRow").append(button);
     });
     ["LLLLL-DDDDD", "UUUU-DDDD-UUUU", "AAAAA-AAAAAA-AAAAA"].forEach((template) => this.addTemplateButton(template));
     this.storage.get("templates").forEach((item) => this.addTemplateButton(item.value));
@@ -509,37 +600,82 @@ class App {
   }
 
   updateAnalysis(password) {
-    const result = this.analyzer.analyze(password);
-    this.lastEntropy = result.entropy;
-    if (password) {
-      this.storage.push("checked", { value: password, entropy: result.entropy, level: result.level.name });
-    }
+    const result = this.analyzer.analyze(password, this.lastBreach);
+    this.lastAnalysis = result;
     this.renderAnalysis(result);
-    this.renderCrackTimes(result.entropy);
-    this.chart.draw(result.entropy);
+    this.renderCrackTimes(result.practicalEntropy);
+    this.chart.draw(result.practicalEntropy);
+  }
+
+  setPwnedMessage(message, type) {
+    const node = this.$("#pwnedResult");
+    node.className = `status-box ${type}`;
+    node.textContent = message;
+  }
+
+  async checkPwned() {
+    const password = this.$("#passwordInput").value;
+    if (!password) {
+      this.setPwnedMessage("Введите пароль перед проверкой утечек.", "neutral");
+      return;
+    }
+    this.setPwnedMessage("Проверяем SHA-1 префикс через Have I Been Pwned...", "neutral");
+    try {
+      this.lastBreach = await this.pwnedChecker.check(password);
+      if (this.lastBreach.found) {
+        this.setPwnedMessage(`Этот пароль найден в известных утечках. Не используйте его. Встречался: ${this.lastBreach.count.toLocaleString("ru-RU")} раз.`, "danger");
+      } else {
+        this.setPwnedMessage("Пароль не найден в базе известных утечек. Это не гарантирует абсолютную безопасность.", "ok");
+      }
+    } catch {
+      this.lastBreach = { status: "unavailable", found: false, count: 0 };
+      this.setPwnedMessage("Проверка утечек временно недоступна.", "neutral");
+    }
+    this.updateAnalysis(password);
+  }
+
+  saveCheck() {
+    if (this.privateMode()) {
+      this.toast("В приватном режиме история не сохраняется");
+      return;
+    }
+    if (!this.lastAnalysis?.length) return;
+    this.storage.push("checked", {
+      length: this.lastAnalysis.length,
+      level: this.lastAnalysis.level.name,
+      theoreticalEntropy: this.lastAnalysis.theoreticalEntropy,
+      practicalEntropy: this.lastAnalysis.practicalEntropy,
+      verdict: this.lastAnalysis.verdict,
+      breach: this.lastBreach?.status || "not_checked"
+    });
+    this.toast("Сохранены только технические данные проверки");
+    this.renderHistory();
   }
 
   renderAnalysis(result) {
     const fill = this.$("#strengthFill");
     fill.style.width = `${result.level.score}%`;
     fill.style.background = result.level.color;
-    this.$("#strengthLabel").textContent = result.password ? `${result.level.name}: ${result.quality}` : "Введите пароль для анализа";
+    this.$("#strengthLabel").textContent = result.length ? `${result.verdict}: ${result.keyRecommendation}` : "Введите пароль для анализа";
+    const breachText = this.lastBreach?.found ? `найден, ${this.lastBreach.count.toLocaleString("ru-RU")} раз` : this.lastBreach?.status === "checked" ? "не найден" : "не проверялся";
+    const summary = [
+      ["Вердикт", result.verdict],
+      ["Теоретическая энтропия", `${result.theoreticalEntropy.toFixed(1)} бит`],
+      ["Практическая оценка", `${result.practicalEntropy.toFixed(1)} бит`],
+      ["Проверка утечек", breachText],
+      ["Ключевая рекомендация", result.keyRecommendation, "wide"]
+    ];
+    this.$("#summaryCards").innerHTML = summary.map(([label, value, wide]) => `<div class="metric-card ${wide || ""}"><div class="metric-label">${this.escape(label)}</div><div class="metric-value">${this.escape(value)}</div></div>`).join("");
     const cards = [
       ["Длина", result.length],
-      ["Энтропия", `${result.entropy.toFixed(1)} бит`],
       ["Уровень", result.level.name],
       ["Повторы", result.hasRepeats ? "найдены" : "нет"],
       ["Шаблоны", result.weakMatches.length ? result.weakMatches.join(", ") : "нет"],
-      ["Словарь", result.dictionaryMatches.length ? result.dictionaryMatches.join(", ") : "нет"]
+      ["Словарь/транслит", result.dictionaryMatches.length ? result.dictionaryMatches.join(", ") : "нет"],
+      ["Даты и годы", result.dateMatches.length ? result.dateMatches.join(", ") : "нет"]
     ];
     this.$("#analysisCards").innerHTML = cards.map(([label, value]) => `<div class="metric-card"><div class="metric-label">${this.escape(label)}</div><div class="metric-value">${this.escape(value)}</div></div>`).join("");
-    const flags = [
-      ["Заглавные", result.flags.upper, true],
-      ["Строчные", result.flags.lower, true],
-      ["Цифры", result.flags.digits, true],
-      ["Спецсимволы", result.flags.special, true],
-      ["Последовательности", result.sequenceMatches.length > 0, false]
-    ];
+    const flags = [["Заглавные", result.flags.upper, true], ["Строчные", result.flags.lower, true], ["Цифры", result.flags.digits, true], ["Спецсимволы", result.flags.special, true], ["Последовательности", result.sequenceMatches.length > 0, false]];
     this.$("#charsetBadges").innerHTML = flags.map(([label, value, positive]) => {
       const good = positive ? value : !value;
       return `<span class="badge ${good ? "ok" : "bad"}">${this.escape(label)}: ${value ? "да" : "нет"}</span>`;
@@ -550,8 +686,8 @@ class App {
   renderCrackTimes(entropy) {
     this.$("#crackTimes").innerHTML = this.estimator.forEntropy(entropy).map((item) => `
       <div class="time-item">
-        <div class="time-label">${item.label}<br>${item.guesses.toLocaleString("ru-RU")} попыток/сек</div>
-        <div class="time-value">${item.formatted}</div>
+        <div class="time-label">${this.escape(item.label)}<br>${item.guesses.toLocaleString("ru-RU")} попыток/сек</div>
+        <div class="time-value">${this.escape(item.formatted)}</div>
       </div>`).join("");
   }
 
@@ -571,7 +707,22 @@ class App {
   generateRandom() {
     const options = this.generatorOptions();
     const count = Number(this.$("#passwordCount").value);
-    this.showGenerated(Array.from({ length: count }, () => this.passwordGenerator.generate(options)), "random");
+    const result = Array.from({ length: count }, () => this.passwordGenerator.generate(options));
+    const adjusted = result.some((item) => item.adjustedLength !== options.length);
+    this.$("#generatorWarning").textContent = adjusted ? "Длина была автоматически увеличена, чтобы вместить все выбранные наборы символов." : "";
+    this.showGenerated(result.map((item) => ({ value: item.value, entropy: EntropyCalculator.theoretical(item.value) })), "random", { length: options.length, count });
+  }
+
+  generatePhrase() {
+    const options = {
+      language: this.$("#phraseLanguage").value,
+      count: Number(this.$("#phraseWordCount").value),
+      separator: this.$("#phraseSeparator").value,
+      digits: this.$("#phraseDigits").checked,
+      special: this.$("#phraseSpecial").checked
+    };
+    const count = Number(this.$("#phraseCount").value);
+    this.showGenerated(Array.from({ length: count }, () => this.wordGenerator.generate(options)), "phrase", { ...options, generatedCount: count });
   }
 
   generateMemorable() {
@@ -580,16 +731,20 @@ class App {
       separator: this.$("#wordSeparator").value,
       digits: this.$("#wordDigits").checked,
       special: this.$("#wordSpecial").checked,
-      wordCase: this.$("#wordCase").value
+      wordCase: this.$("#wordCase").value,
+      language: "en"
     };
     const count = Number(this.$("#memorableCount").value);
-    this.showGenerated(Array.from({ length: count }, () => this.wordGenerator.generate(options)), "memorable");
+    this.showGenerated(Array.from({ length: count }, () => this.wordGenerator.generate(options)), "memorable", { ...options, generatedCount: count });
   }
 
   generateKeys() {
     const template = this.$("#keyTemplate").value || "AAAAA-AAAAAA-AAAAA";
     const count = Number(this.$("#keyCount").value);
-    this.showGenerated(Array.from({ length: count }, () => this.keyGenerator.generate(template)), "key");
+    this.showGenerated(Array.from({ length: count }, () => {
+      const value = this.keyGenerator.generate(template);
+      return { value, entropy: EntropyCalculator.theoretical(value) };
+    }), "key", { template, count });
   }
 
   generateReadableKeys() {
@@ -598,35 +753,80 @@ class App {
     const separator = this.$("#readableSeparator").value;
     const digits = this.$("#readableDigits").checked;
     const wordCase = this.$("#readableMixed").checked ? "mixed" : "title";
-    this.showGenerated(Array.from({ length: count }, () => this.wordGenerator.generate({ count: wordCount, separator, digits, special: false, wordCase })), "readable-key");
+    this.showGenerated(Array.from({ length: count }, () => this.wordGenerator.generate({ count: wordCount, separator, digits, special: false, wordCase, language: "en" })), "readable-key", { wordCount, separator, digits, count });
   }
 
-  showGenerated(values, type) {
-    this.generated = values.filter(Boolean).map((value) => ({ value, type, entropy: EntropyCalculator.calculate(value) }));
-    this.generated.forEach((item) => this.storage.push("generated", item));
-    this.$("#generatedList").innerHTML = this.generated.map((item, index) => `
+  showGenerated(items, type, params) {
+    clearTimeout(this.autoClearTimer);
+    this.hiddenGenerated = false;
+    this.$("#hideAll").textContent = "Скрыть все значения";
+    this.generated = items.filter((item) => item.value).map((item) => ({ ...item, type }));
+    this.renderGenerated();
+    this.storeGeneration(type, params);
+    if (this.$("#autoClear").checked) {
+      this.autoClearTimer = setTimeout(() => {
+        this.generated = [];
+        this.renderGenerated();
+        this.toast("Сгенерированные значения автоматически очищены");
+      }, 60000);
+    }
+  }
+
+  storeGeneration(type, params) {
+    if (this.privateMode()) return;
+    const saveValues = this.$("#saveGenerated").checked;
+    this.storage.push("generated", {
+      type,
+      count: this.generated.length,
+      params,
+      values: saveValues ? this.generated.map((item) => item.value) : [],
+      savedValues: saveValues
+    });
+    this.renderHistory();
+  }
+
+  renderGenerated() {
+    this.$("#generatedList").innerHTML = this.generated.length ? this.generated.map((item, index) => `
       <div class="generated-item">
         <div>
-          <div class="generated-value">${this.escape(item.value)}</div>
-          <div class="generated-meta">${item.type} · ${item.entropy.toFixed(1)} бит энтропии</div>
+          <div class="generated-value ${this.hiddenGenerated ? "hidden" : ""}">${this.hiddenGenerated ? "••••••••••" : this.escape(item.value)}</div>
+          <div class="generated-meta">${this.escape(item.type)} · ${Number(item.entropy).toFixed(1)} бит оценки</div>
         </div>
         <div class="generated-actions">
           <button class="icon-btn" data-copy-index="${index}" type="button" title="Копировать">⧉</button>
+          <button class="icon-btn" data-copy-clear-index="${index}" type="button" title="Скопировать и очистить">⧉×</button>
           <button class="icon-btn" data-fav-index="${index}" type="button" title="В избранное">☆</button>
         </div>
-      </div>`).join("");
+      </div>`).join("") : `<div class="history-item">Сгенерированные значения очищены или ещё не созданы.</div>`;
     document.querySelectorAll("[data-copy-index]").forEach((button) => button.addEventListener("click", () => this.copy(this.generated[button.dataset.copyIndex].value)));
-    document.querySelectorAll("[data-fav-index]").forEach((button) => button.addEventListener("click", () => {
-      const added = this.storage.toggleFavorite(this.generated[button.dataset.favIndex].value);
-      this.toast(added ? "Добавлено в избранное" : "Удалено из избранного");
-      this.renderHistory();
-    }));
+    document.querySelectorAll("[data-copy-clear-index]").forEach((button) => button.addEventListener("click", () => this.copyAndClear(Number(button.dataset.copyClearIndex))));
+    document.querySelectorAll("[data-fav-index]").forEach((button) => button.addEventListener("click", () => this.addFavorite(Number(button.dataset.favIndex))));
+  }
+
+  async copyAndClear(index) {
+    await this.copy(this.generated[index].value);
+    this.generated.splice(index, 1);
+    this.renderGenerated();
+  }
+
+  addFavorite(index) {
+    if (this.privateMode()) {
+      this.toast("В приватном режиме избранное не сохраняется");
+      return;
+    }
+    if (!confirm("Значение будет сохранено в браузере в LocalStorage. Продолжить?")) return;
+    this.storage.push("favorites", { value: this.generated[index].value, type: this.generated[index].type });
+    this.toast("Добавлено в избранное");
     this.renderHistory();
   }
 
   saveTemplate() {
     const value = this.$("#keyTemplate").value.trim();
     if (!value) return;
+    if (this.privateMode()) {
+      this.toast("В приватном режиме шаблоны не сохраняются");
+      return;
+    }
     const templates = this.storage.get("templates");
     if (!templates.some((item) => item.value === value)) {
       this.storage.set("templates", [{ value, createdAt: new Date().toISOString() }, ...templates].slice(0, 50));
@@ -637,33 +837,69 @@ class App {
   }
 
   renderHistory() {
-    this.renderList("#generatedHistory", this.storage.get("generated"));
-    this.renderList("#checkedHistory", this.storage.get("checked"));
-    this.renderList("#favoritesList", this.storage.get("favorites"));
-    this.renderList("#templatesList", this.storage.get("templates"));
+    this.renderGeneratedHistory();
+    this.renderCheckedHistory();
+    this.renderSimpleList("#favoritesList", this.storage.get("favorites"), "Избранное пусто");
+    this.renderSimpleList("#templatesList", this.storage.get("templates"), "Шаблонов пока нет");
   }
 
-  renderList(selector, list) {
-    const node = this.$(selector);
-    if (!node) return;
-    node.innerHTML = list.length ? list.map((item) => `
+  renderGeneratedHistory() {
+    const list = this.storage.get("generated");
+    this.$("#generatedHistory").innerHTML = list.length ? list.map((item) => `
+      <div class="history-item">
+        <div class="history-value">${item.savedValues ? this.escape(item.values.join(", ")) : "Значения не сохранены"}</div>
+        <div class="generated-meta">${this.escape(item.type)} · ${item.count} шт. · ${new Date(item.createdAt).toLocaleString("ru-RU")}</div>
+      </div>`).join("") : `<div class="history-item">История генераций пуста</div>`;
+  }
+
+  renderCheckedHistory() {
+    const list = this.storage.get("checked");
+    this.$("#checkedHistory").innerHTML = list.length ? list.map((item) => `
+      <div class="history-item">
+        <div class="history-value">Длина: ${item.length} · ${this.escape(item.verdict)}</div>
+        <div class="generated-meta">${this.escape(item.level)} · теория ${Number(item.theoreticalEntropy).toFixed(1)} бит · практика ${Number(item.practicalEntropy).toFixed(1)} бит · ${new Date(item.createdAt).toLocaleString("ru-RU")}</div>
+      </div>`).join("") : `<div class="history-item">История проверок пуста</div>`;
+  }
+
+  renderSimpleList(selector, list, emptyText) {
+    this.$(selector).innerHTML = list.length ? list.map((item) => `
       <div class="history-item">
         <div class="history-value">${this.escape(item.value)}</div>
-        <div class="generated-meta">${this.escape(item.level || item.type || "template")} ${item.entropy ? `· ${Number(item.entropy).toFixed(1)} бит` : ""} · ${new Date(item.createdAt).toLocaleString("ru-RU")}</div>
-      </div>`).join("") : `<div class="history-item">Пока пусто</div>`;
+        <div class="generated-meta">${this.escape(item.type || "template")} · ${new Date(item.createdAt).toLocaleString("ru-RU")}</div>
+      </div>`).join("") : `<div class="history-item">${emptyText}</div>`;
+  }
+
+  clearList(name) {
+    if (!confirm("Удалить выбранные локальные данные?")) return;
+    this.storage.clear(name);
+    this.renderHistory();
+    this.toast("Данные очищены");
+  }
+
+  clearAllHistory() {
+    if (!confirm("Очистить все данные Password Security Lab из LocalStorage?")) return;
+    this.storage.clearAllProjectData();
+    this.renderHistory();
+    this.toast("Вся история очищена");
   }
 
   exportHistory(name, format) {
+    if (!confirm("Экспорт может содержать чувствительные данные. Сохраняйте файл только в безопасном месте.")) return;
     const data = this.storage.get(name);
     const content = format === "csv"
-      ? ["value,type,level,entropy,createdAt", ...data.map((item) => [item.value, item.type || "", item.level || "", item.entropy || "", item.createdAt].map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))].join("\n")
-      : data.map((item) => `${item.value} | ${item.type || item.level || ""} | ${item.entropy || ""} | ${item.createdAt}`).join("\n");
+      ? this.toCsv(data)
+      : data.map((item) => JSON.stringify(item, null, 0)).join("\n");
     const blob = new Blob([content], { type: format === "csv" ? "text/csv" : "text/plain" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = `password-security-lab-${name}.${format}`;
     link.click();
     URL.revokeObjectURL(link.href);
+  }
+
+  toCsv(data) {
+    const keys = [...new Set(data.flatMap((item) => Object.keys(item)))];
+    return [keys.join(","), ...data.map((item) => keys.map((key) => `"${String(item[key] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
   }
 
   async copy(value) {

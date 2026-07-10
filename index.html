@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Password Security Lab: анализатор сложности, энтропии, времени взлома и генератор безопасных паролей." />
+  <meta name="description" content="Password Security Lab: приватный анализатор паролей, проверка утечек и генератор стойких паролей." />
   <title>Password Security Lab</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -20,6 +20,10 @@
         <button class="theme-btn" data-theme-choice="dark" type="button">Тёмная</button>
       </div>
     </header>
+
+    <section class="privacy-note panel">
+      <strong>Приватность:</strong> все вычисления выполняются в браузере. Пароли не отправляются на сервер. Не вводите реальные пароли от важных аккаунтов без необходимости.
+    </section>
 
     <nav class="tabs" aria-label="Основные разделы">
       <button class="tab active" data-section="analyzer" type="button">Анализатор</button>
@@ -38,33 +42,51 @@
               </div>
               <button id="clearAnalyzer" class="ghost-btn" type="button">Очистить</button>
             </div>
+
             <label class="field">
               <span>Введите пароль</span>
               <div class="password-field">
                 <input id="passwordInput" type="password" autocomplete="new-password" placeholder="Например: Forest-Tiger-Rocket-82" />
-                <button id="togglePassword" type="button" aria-label="Показать или скрыть пароль">Показать</button>
+                <button id="togglePassword" type="button">Показать</button>
               </div>
             </label>
+
             <div class="strength-meter" aria-label="Индикатор сложности">
               <div id="strengthFill" class="strength-fill"></div>
             </div>
             <div id="strengthLabel" class="strength-label">Введите пароль для анализа</div>
+
+            <div class="action-row">
+              <button id="checkPwned" class="primary-btn" type="button">Проверить в утечках</button>
+              <button id="saveCheck" class="ghost-btn" type="button">Сохранить результат</button>
+            </div>
+            <div id="pwnedResult" class="status-box neutral">Проверка утечек выполняется только по кнопке через k-anonymity.</div>
             <div id="recommendations" class="recommendations"></div>
           </article>
 
           <article class="panel">
             <div class="panel-heading">
               <div>
+                <p class="eyebrow">Итог</p>
+                <h2>Итоговая оценка</h2>
+              </div>
+            </div>
+            <div id="summaryCards" class="metric-grid"></div>
+          </article>
+        </div>
+
+        <div class="grid two lower-grid">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
                 <p class="eyebrow">Показатели</p>
-                <h2>Качество пароля</h2>
+                <h2>Детали анализа</h2>
               </div>
             </div>
             <div id="analysisCards" class="metric-grid"></div>
             <div id="charsetBadges" class="badge-row"></div>
           </article>
-        </div>
 
-        <div class="grid two lower-grid">
           <article class="panel">
             <div class="panel-heading">
               <div>
@@ -74,29 +96,38 @@
             </div>
             <div id="crackTimes" class="time-list"></div>
           </article>
-
-          <article class="panel chart-panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Сравнение</p>
-                <h2>График стойкости</h2>
-              </div>
-            </div>
-            <canvas id="crackChart" width="900" height="420" role="img" aria-label="График сравнения времени взлома"></canvas>
-            <div class="chart-legend">
-              <span><i class="dot current"></i>Текущий</span>
-              <span><i class="dot recommended"></i>Рекомендованный</span>
-              <span><i class="dot corporate"></i>Корпоративный</span>
-              <span><i class="dot high"></i>Высокий</span>
-            </div>
-          </article>
         </div>
+
+        <article class="panel chart-panel lower-grid">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Сравнение</p>
+              <h2>График практической стойкости</h2>
+            </div>
+          </div>
+          <canvas id="crackChart" width="900" height="420" role="img" aria-label="График сравнения стойкости"></canvas>
+          <div class="chart-legend">
+            <span><i class="dot current"></i>Текущий</span>
+            <span><i class="dot recommended"></i>Рекомендованный</span>
+            <span><i class="dot corporate"></i>Корпоративный</span>
+            <span><i class="dot high"></i>Высокий</span>
+          </div>
+        </article>
       </section>
 
       <section id="generator" class="section">
+        <div class="panel settings-panel">
+          <div class="checks-grid">
+            <label><input id="privateMode" type="checkbox" checked /> Приватный режим</label>
+            <label><input id="saveGenerated" type="checkbox" /> Сохранять сгенерированные значения в историю</label>
+            <label><input id="autoClear" type="checkbox" checked /> Автоочистка через 60 секунд</label>
+          </div>
+        </div>
+
         <div class="generator-layout">
           <aside class="panel generator-menu" aria-label="Режимы генератора">
             <button class="mode-btn active" data-mode="random" type="button">Случайные пароли</button>
+            <button class="mode-btn" data-mode="phrase" type="button">Парольная фраза</button>
             <button class="mode-btn" data-mode="memorable" type="button">Запоминаемые</button>
             <button class="mode-btn" data-mode="keys" type="button">Ключи и лицензии</button>
             <button class="mode-btn" data-mode="readableKeys" type="button">Читаемые ключи</button>
@@ -124,6 +155,27 @@
                 <label><input id="excludeSimilar" type="checkbox" /> Исключить похожие символы</label>
                 <label><input id="excludeAmbiguous" type="checkbox" /> Исключить неоднозначные символы</label>
                 <label><input id="excludeCombos" type="checkbox" /> Исключить похожие комбинации</label>
+              </div>
+              <div id="generatorWarning" class="status-box neutral"></div>
+            </section>
+
+            <section class="panel generator-mode" id="mode-phrase">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Passphrase</p>
+                  <h2>Парольная фраза</h2>
+                </div>
+                <button id="generatePhrase" class="primary-btn" type="button">Сгенерировать</button>
+              </div>
+              <div class="form-grid">
+                <label class="field"><span>Язык словаря</span><select id="phraseLanguage"><option value="en">Английский</option><option value="ru">Русский</option></select></label>
+                <label class="field"><span>Количество слов</span><input id="phraseWordCount" type="number" min="3" max="8" value="4" /></label>
+                <label class="field"><span>Разделитель</span><input id="phraseSeparator" type="text" maxlength="3" value="-" /></label>
+                <label class="field"><span>Количество</span><input id="phraseCount" type="number" min="1" max="20" value="5" /></label>
+              </div>
+              <div class="checks-grid">
+                <label><input id="phraseDigits" type="checkbox" checked /> Добавить число</label>
+                <label><input id="phraseSpecial" type="checkbox" /> Добавить спецсимвол</label>
               </div>
             </section>
 
@@ -189,7 +241,10 @@
                   <p class="eyebrow">Результаты</p>
                   <h2>Сгенерированные значения</h2>
                 </div>
-                <button id="copyAll" class="ghost-btn" type="button">Копировать всё</button>
+                <div class="action-row compact">
+                  <button id="hideAll" class="ghost-btn" type="button">Скрыть все значения</button>
+                  <button id="copyAll" class="ghost-btn" type="button">Копировать всё</button>
+                </div>
               </div>
               <div id="generatedList" class="generated-list"></div>
             </article>
@@ -198,12 +253,28 @@
       </section>
 
       <section id="history" class="section">
-        <div class="grid two">
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Очистка</p>
+              <h2>Управление локальными данными</h2>
+            </div>
+            <button id="clearAllHistory" class="danger-btn" type="button">Очистить всю историю</button>
+          </div>
+          <div class="action-row">
+            <button class="ghost-btn" data-clear="checked" type="button">Очистить историю проверок</button>
+            <button class="ghost-btn" data-clear="generated" type="button">Очистить историю генераций</button>
+            <button class="ghost-btn" data-clear="favorites" type="button">Очистить избранное</button>
+            <button class="ghost-btn" data-clear="templates" type="button">Очистить шаблоны</button>
+          </div>
+        </article>
+
+        <div class="grid two lower-grid">
           <article class="panel">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">LocalStorage</p>
-                <h2>Последние генерации</h2>
+                <h2>История генераций</h2>
               </div>
               <button class="ghost-btn" data-export="generated" type="button">TXT</button>
               <button class="ghost-btn" data-export-csv="generated" type="button">CSV</button>
@@ -213,8 +284,8 @@
           <article class="panel">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">LocalStorage</p>
-                <h2>Последние проверки</h2>
+                <p class="eyebrow">Без паролей</p>
+                <h2>История проверок</h2>
               </div>
               <button class="ghost-btn" data-export="checked" type="button">TXT</button>
               <button class="ghost-btn" data-export-csv="checked" type="button">CSV</button>
@@ -227,7 +298,7 @@
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">Favorites</p>
-                <h2>Избранные пароли</h2>
+                <h2>Избранные значения</h2>
               </div>
             </div>
             <div id="favoritesList" class="history-list"></div>
@@ -247,6 +318,7 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="words.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
